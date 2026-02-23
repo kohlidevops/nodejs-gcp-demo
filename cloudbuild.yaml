@@ -59,3 +59,6 @@ images:
 
 substitutions:
   _ZONE: 'us-central1-c'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
