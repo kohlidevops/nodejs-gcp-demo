@@ -1,0 +1,71 @@
+steps:
+  # ── Step 1: Install npm dependencies ──────────────────────────
+  - name: 'node:18-alpine'
+    id: 'install'
+    entrypoint: npm
+    args: ['install']
+
+  # ── Step 2: Run tests (pipeline STOPS if tests fail) ──────────
+  - name: 'node:18-alpine'
+    id: 'test'
+    entrypoint: npm
+    args: ['test']
+    waitFor: ['install']
+
+  # ── Step 3: Build Docker image (two tags) ─────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-image'
+    args:
+      - build
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/nodejs-gcp-demo:$COMMIT_SHA'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/nodejs-gcp-demo:latest'
+      - '.'
+    waitFor: ['test']
+
+  # ── Step 4: Push commit-SHA tagged image to GCR ───────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-sha'
+    args: [push, 'gcr.io/$PROJECT_ID/nodejs-gcp-demo:$COMMIT_SHA']
+    waitFor: ['build-image']
+
+  # ── Step 5: Push latest tag to GCR ───────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-latest'
+    args: [push, 'gcr.io/$PROJECT_ID/nodejs-gcp-demo:latest']
+    waitFor: ['build-image']
+
+  # ── Step 6: SSH into VM and deploy the new container ─────────
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'deploy'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        gcloud compute ssh nodejs-vm \
+          --zone=${_ZONE} \
+          --command="
+            sudo docker pull gcr.io/$PROJECT_ID/nodejs-gcp-demo:latest &&
+            sudo docker stop nodejs-app 2>/dev/null || true &&
+            sudo docker rm nodejs-app 2>/dev/null || true &&
+            sudo docker run -d \
+              --name nodejs-app \
+              --restart always \
+              -p 3000:3000 \
+              -e NODE_ENV=production \
+              gcr.io/$PROJECT_ID/nodejs-gcp-demo:latest
+          "
+    waitFor: ['push-latest']
+
+# Store both image versions in GCR artifact registry
+images:
+  - 'gcr.io/$PROJECT_ID/nodejs-gcp-demo:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/nodejs-gcp-demo:latest'
+
+# Variable injected from the Cloud Build Trigger (Step 9E)
+substitutions:
+  _ZONE: 'us-central1-a'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
